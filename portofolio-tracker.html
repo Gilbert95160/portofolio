@@ -1,0 +1,663 @@
+import React, { useState, useEffect } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { TrendingUp, TrendingDown, RefreshCw, Settings, Download, DollarSign, BarChart3, Eye } from 'lucide-react';
+
+const PortfolioTracker = () => {
+  const [activeTab, setActiveTab] = useState('portfolio');
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(new Date());
+
+  // Configuration modifiable - VOS DONNÉES ICI
+  const [portfolioConfig] = useState([
+    { ticker: 'AAPL', quantity: 10, purchasePrice: 145.50 },
+    { ticker: 'MSFT', quantity: 8, purchasePrice: 280.00 },
+    { ticker: 'VWCE.PA', quantity: 25, purchasePrice: 85.40 }
+  ]);
+
+  const [watchlistConfig] = useState([
+    'IWDA.AS',
+    'EIMI.PA', 
+    'CW8.PA',
+    'PAEM.PA',
+    'PCEU.PA',
+    'LYPS.PA',
+    'GOOGL',
+    'NVDA'
+  ]);
+
+  // Données enrichies avec prix réels
+  const [portfolioStocks, setPortfolioStocks] = useState([]);
+  const [watchlistStocks, setWatchlistStocks] = useState([]);
+
+  // Fonction pour récupérer les données Yahoo Finance (simulation)
+  const fetchYahooData = async (ticker) => {
+  try {
+    // API Yahoo Finance gratuite (via proxy CORS)
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    const result = data.chart.result[0];
+    const meta = result.meta;
+    const quote = result.indicators.quote[0];
+    
+    return {
+      price: meta.regularMarketPrice,
+      change: meta.regularMarketPrice - meta.previousClose,
+      changePercent: ((meta.regularMarketPrice - meta.previousClose) / meta.previousClose) * 100,
+      high52w: meta.fiftyTwoWeekHigh,
+      low52w: meta.fiftyTwoWeekLow,
+      name: meta.longName || ticker
+    };
+  } catch (error) {
+    console.error('Erreur API:', error);
+    // Fallback sur données simulées
+    return { price: 100, change: 0, changePercent: 0, high52w: 120, low52w: 80, name: ticker };
+  }
+};
+
+  // Fonction pour rafraîchir toutes les données
+  const refreshAllData = async () => {
+    setIsLoading(true);
+    try {
+      // Rafraîchir le portefeuille
+      const portfolioPromises = portfolioConfig.map(async (config) => {
+        const data = await fetchYahooData(config.ticker);
+        const value = config.quantity * data.price;
+        const pnl = value - (config.quantity * config.purchasePrice);
+        const pnlPercent = (pnl / (config.quantity * config.purchasePrice)) * 100;
+        
+        return {
+          id: config.ticker,
+          ticker: config.ticker,
+          name: data.name,
+          quantity: config.quantity,
+          purchasePrice: config.purchasePrice,
+          currentPrice: data.price,
+          change: data.change,
+          changePercent: data.changePercent,
+          value: value,
+          pnl: pnl,
+          pnlPercent: pnlPercent,
+          high52w: data.high52w,
+          low52w: data.low52w,
+          type: config.ticker.includes('.') || config.ticker.includes('ETF') ? 'ETF' : 'Action'
+        };
+      });
+
+      // Rafraîchir la watchlist
+      const watchlistPromises = watchlistConfig.map(async (ticker) => {
+        const data = await fetchYahooData(ticker);
+        return {
+          id: ticker,
+          ticker: ticker,
+          name: data.name,
+          currentPrice: data.price,
+          change: data.change,
+          changePercent: data.changePercent,
+          high52w: data.high52w,
+          low52w: data.low52w,
+          alerts: [],
+          type: ticker.includes('.') || ticker.includes('ETF') ? 'ETF' : 'Action'
+        };
+      });
+
+      const [portfolioData, watchlistData] = await Promise.all([
+        Promise.all(portfolioPromises),
+        Promise.all(watchlistPromises)
+      ]);
+
+      // Calculer les poids du portefeuille
+      const totalValue = portfolioData.reduce((sum, stock) => sum + stock.value, 0);
+      const portfolioWithWeights = portfolioData.map(stock => ({
+        ...stock,
+        weight: totalValue > 0 ? (stock.value / totalValue) * 100 : 0
+      }));
+
+      setPortfolioStocks(portfolioWithWeights);
+      setWatchlistStocks(watchlistData);
+      setLastUpdate(new Date());
+    } catch (error) {
+      console.error('Erreur lors du rafraîchissement:', error);
+    }
+    setIsLoading(false);
+  };
+
+  // Charger les données au démarrage
+  useEffect(() => {
+    refreshAllData();
+  }, []);
+
+  // Calculs du portefeuille
+  const totalPortfolioValue = portfolioStocks.reduce((sum, stock) => sum + stock.value, 0);
+  const totalPnL = portfolioStocks.reduce((sum, stock) => sum + stock.pnl, 0);
+  const totalPnLPercent = portfolioStocks.length > 0 && totalPortfolioValue > totalPnL ? (totalPnL / (totalPortfolioValue - totalPnL)) * 100 : 0;
+
+  // Données pour les graphiques
+  const performanceData = [
+    { date: '1 Jan', value: 100 },
+    { date: '1 Fév', value: 105 },
+    { date: '1 Mar', value: 108 },
+    { date: '1 Avr', value: 112 },
+    { date: '1 Mai', value: 109 },
+    { date: '1 Jun', value: 115 },
+    { date: '1 Jul', value: Math.max(80, Math.round(100 + totalPnLPercent)) }
+  ];
+
+  const allocationData = portfolioStocks.map((stock, index) => ({
+    name: stock.ticker,
+    value: stock.weight || 0,
+    color: `hsl(${index * 137.5 % 360}, 70%, 50%)`
+  }));
+
+  // Export des données de configuration
+  const exportConfig = () => {
+    const config = {
+      portfolio: portfolioConfig,
+      watchlist: watchlistConfig,
+      lastUpdate: lastUpdate.toISOString()
+    };
+    
+    const dataStr = JSON.stringify(config, null, 2);
+    const dataBlob = new Blob([dataStr], {type: 'application/json'});
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'portfolio-config.json';
+    link.click();
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="bg-blue-600 p-2 rounded-lg">
+                <BarChart3 className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">Assistant Virtuel Trading</h1>
+                <p className="text-sm text-gray-500">
+                  Dernière mise à jour : {lastUpdate.toLocaleTimeString('fr-FR')}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={refreshAllData}
+                disabled={isLoading}
+                className="flex items-center space-x-2 bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+                <span>Actualiser</span>
+              </button>
+              <button
+                onClick={() => setShowConfigModal(true)}
+                className="flex items-center space-x-2 bg-gray-600 text-white px-3 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <Settings className="h-4 w-4" />
+                <span>Config</span>
+              </button>
+              <button
+                onClick={exportConfig}
+                className="flex items-center space-x-2 bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Download className="h-4 w-4" />
+                <span>Export</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Métriques principales */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Valeur Totale</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {totalPortfolioValue.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                </p>
+              </div>
+              <div className="bg-blue-100 p-3 rounded-full">
+                <DollarSign className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">P&L Total</p>
+                <p className={`text-2xl font-bold ${totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {totalPnL >= 0 ? '+' : ''}{totalPnL.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                </p>
+              </div>
+              <div className={`p-3 rounded-full ${totalPnL >= 0 ? 'bg-green-100' : 'bg-red-100'}`}>
+                {totalPnL >= 0 ? 
+                  <TrendingUp className="h-6 w-6 text-green-600" /> : 
+                  <TrendingDown className="h-6 w-6 text-red-600" />
+                }
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Performance</p>
+                <p className={`text-2xl font-bold ${totalPnLPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {totalPnLPercent >= 0 ? '+' : ''}{totalPnLPercent.toFixed(2)}%
+                </p>
+              </div>
+              <div className="bg-purple-100 p-3 rounded-full">
+                <BarChart3 className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600">Titres Suivis</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {portfolioStocks.length + watchlistStocks.length}
+                </p>
+              </div>
+              <div className="bg-orange-100 p-3 rounded-full">
+                <Eye className="h-6 w-6 text-orange-600" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Graphiques */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="lg:col-span-2 bg-white rounded-lg shadow-sm p-6">
+            <h3 className="text-lg font-semibold mb-4">Performance du Portefeuille</h3>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={performanceData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h3 className="text-lg font-semibold mb-4">Allocation</h3>
+            {allocationData.length > 0 && allocationData.some(item => item.value > 0) ? (
+              <>
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={allocationData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={90}
+                      dataKey="value"
+                    >
+                      {allocationData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="mt-4 space-y-2">
+                  {allocationData.map((item, index) => (
+                    <div key={index} className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
+                        <span className="text-sm font-medium">{item.name}</span>
+                      </div>
+                      <span className="text-sm text-gray-600">{item.value.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="text-center text-gray-500 py-8">
+                <p>Aucune donnée de portefeuille</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Onglets */}
+        <div className="bg-white rounded-lg shadow-sm">
+          <div className="border-b border-gray-200">
+            <nav className="flex space-x-8 px-6">
+              <button
+                onClick={() => setActiveTab('portfolio')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'portfolio'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <DollarSign className="h-4 w-4" />
+                  <span>Portefeuille ({portfolioStocks.length})</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('watchlist')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'watchlist'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <div className="flex items-center space-x-2">
+                  <Eye className="h-4 w-4" />
+                  <span>Watchlist ({watchlistStocks.length})</span>
+                </div>
+              </button>
+            </nav>
+          </div>
+
+          <div className="p-6">
+            {activeTab === 'portfolio' && (
+              <div className="overflow-x-auto">
+                {portfolioStocks.length > 0 ? (
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Titre</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Qté</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PRU</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cours</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Var J/J</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">P&L</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valeur</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Poids</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {portfolioStocks.map((stock) => (
+                        <tr key={stock.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div>
+                              <div className="text-sm font-medium text-gray-900 flex items-center space-x-2">
+                                <span>{stock.ticker}</span>
+                                <span className={`px-2 py-1 text-xs rounded-full ${
+                                  stock.type === 'ETF' 
+                                    ? 'bg-blue-100 text-blue-800' 
+                                    : 'bg-green-100 text-green-800'
+                                }`}>
+                                  {stock.type}
+                                </span>
+                              </div>
+                              <div className="text-sm text-gray-500">{stock.name}</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{stock.quantity}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{stock.purchasePrice.toFixed(2)}€</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{stock.currentPrice.toFixed(2)}€</td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className={`flex items-center space-x-1 ${stock.changePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stock.changePercent >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                              <span className="text-sm font-medium">{stock.changePercent >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className={stock.pnlPercent >= 0 ? 'text-green-600' : 'text-red-600'}>
+                              <div className="text-sm font-medium">{stock.pnl >= 0 ? '+' : ''}{stock.pnl.toFixed(0)}€</div>
+                              <div className="text-xs">{stock.pnlPercent >= 0 ? '+' : ''}{stock.pnlPercent.toFixed(2)}%</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {stock.value.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{stock.weight.toFixed(1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-gray-500">Configurez votre portefeuille en modifiant le code source</p>
+                    <button 
+                      onClick={() => setShowConfigModal(true)}
+                      className="mt-2 text-blue-600 hover:text-blue-800 underline"
+                    >
+                      Voir la configuration
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'watchlist' && (
+              <div className="overflow-x-auto">
+                {watchlistStocks.length > 0 ? (
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Titre</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cours</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Var J/J</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">52s H/B</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {watchlistStocks.map((stock) => (
+                        <tr key={stock.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">{stock.ticker}</div>
+                              <div className="text-sm text-gray-500">{stock.name}</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`px-2 py-1 text-xs rounded-full ${
+                              stock.type === 'ETF' 
+                                ? 'bg-blue-100 text-blue-800' 
+                                : 'bg-green-100 text-green-800'
+                            }`}>
+                              {stock.type}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{stock.currentPrice.toFixed(2)}€</td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className={`flex items-center space-x-1 ${stock.changePercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {stock.changePercent >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                              <span className="text-sm font-medium">{stock.changePercent >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {stock.high52w.toFixed(2)}€ / {stock.low52w.toFixed(2)}€
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-gray-500">Configurez votre watchlist en modifiant le code source</p>
+                    <button 
+                      onClick={() => setShowConfigModal(true)}
+                      className="mt-2 text-blue-600 hover:text-blue-800 underline"
+                    >
+                      Voir la configuration
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Modal de Configuration */}
+      {showConfigModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b">
+              <h3 className="text-xl font-semibold">📊 Guide de Configuration</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Modifiez le code source pour personnaliser vos données
+              </p>
+            </div>
+            
+            <div className="p-6 space-y-8">
+              {/* Configuration Portefeuille */}
+              <div>
+                <h4 className="text-lg font-semibold mb-4 flex items-center">
+                  📈 Configuration Portefeuille
+                </h4>
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-sm text-gray-700 mb-3">
+                    <strong>Trouvez ces lignes dans le code et modifiez-les avec vos données :</strong>
+                  </p>
+                  <pre className="text-sm text-gray-800 bg-white p-4 rounded border overflow-x-auto font-mono">
+{`const [portfolioConfig] = useState([
+  { ticker: 'AAPL', quantity: 10, purchasePrice: 145.50 },
+  { ticker: 'MSFT', quantity: 8, purchasePrice: 280.00 },
+  { ticker: 'VWCE.PA', quantity: 25, purchasePrice: 85.40 }
+  // Ajoutez vos lignes ici :
+  // { ticker: 'VOTRE_TICKER', quantity: XX, purchasePrice: XX.XX },
+]);`}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Configuration Watchlist */}
+              <div>
+                <h4 className="text-lg font-semibold mb-4 flex items-center">
+                  👁️ Configuration Watchlist
+                </h4>
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <p className="text-sm text-gray-700 mb-3">
+                    <strong>Modifiez cette liste avec vos tickers à surveiller :</strong>
+                  </p>
+                  <pre className="text-sm text-gray-800 bg-white p-4 rounded border overflow-x-auto font-mono">
+{`const [watchlistConfig] = useState([
+  'IWDA.AS',    // ETF World
+  'EIMI.PA',    // ETF Emerging Markets
+  'CW8.PA',     // ETF MSCI World
+  'PAEM.PA',    // ETF Amundi Emerging
+  'PCEU.PA',    // ETF Europe
+  'LYPS.PA',    // ETF TIPS
+  'GOOGL',      // Alphabet
+  'NVDA'        // NVIDIA
+  // Ajoutez vos tickers :
+  // 'VOTRE_TICKER',
+]);`}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Étapes pour GitHub */}
+              <div>
+                <h4 className="text-lg font-semibold mb-4 flex items-center">
+                  🚀 Déploiement sur GitHub Pages
+                </h4>
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <ol className="text-sm space-y-2 list-decimal list-inside">
+                    <li>Créez un nouveau repository sur GitHub</li>
+                    <li>Uploadez le fichier HTML avec votre code modifié</li>
+                    <li>Activez GitHub Pages dans Settings → Pages</li>
+                    <li>Votre app sera accessible via https://votrenom.github.io/portfolio</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Intégration Yahoo Finance */}
+              <div>
+                <h4 className="text-lg font-semibold mb-4 flex items-center">
+                  💰 Intégration Yahoo Finance (vraies données)
+                </h4>
+                <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+                  <p className="text-sm text-gray-700 mb-3">
+                    Pour avoir les vraies données, remplacez la fonction <code className="bg-gray-200 px-1 rounded">fetchYahooData</code> par :
+                  </p>
+                  <pre className="text-sm text-gray-800 bg-white p-4 rounded border overflow-x-auto font-mono">
+{`const fetchYahooData = async (ticker) => {
+  try {
+    // API Yahoo Finance gratuite (via proxy CORS)
+    const url = \`https://query1.finance.yahoo.com/v8/finance/chart/\${ticker}\`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    const result = data.chart.result[0];
+    const meta = result.meta;
+    const quote = result.indicators.quote[0];
+    
+    return {
+      price: meta.regularMarketPrice,
+      change: meta.regularMarketPrice - meta.previousClose,
+      changePercent: ((meta.regularMarketPrice - meta.previousClose) / meta.previousClose) * 100,
+      high52w: meta.fiftyTwoWeekHigh,
+      low52w: meta.fiftyTwoWeekLow,
+      name: meta.longName || ticker
+    };
+  } catch (error) {
+    console.error('Erreur API:', error);
+    // Fallback sur données simulées
+    return { price: 100, change: 0, changePercent: 0, high52w: 120, low52w: 80, name: ticker };
+  }
+};`}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Exemples de tickers */}
+              <div>
+                <h4 className="text-lg font-semibold mb-4">
+                  📋 Exemples de Tickers Populaires
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-blue-50 p-4 rounded-lg">
+                    <h5 className="font-medium text-blue-800 mb-2">ETF Européens (.PA = Paris)</h5>
+                    <ul className="text-sm space-y-1">
+                      <li><code>VWCE.PA</code> - Vanguard All-World</li>
+                      <li><code>IWDA.AS</code> - iShares World (.AS = Amsterdam)</li>
+                      <li><code>EIMI.PA</code> - Emerging Markets</li>
+                      <li><code>PCEU.PA</code> - Amundi Europe</li>
+                    </ul>
+                  </div>
+                  <div className="bg-green-50 p-4 rounded-lg">
+                    <h5 className="font-medium text-green-800 mb-2">Actions US (sans suffixe)</h5>
+                    <ul className="text-sm space-y-1">
+                      <li><code>AAPL</code> - Apple</li>
+                      <li><code>MSFT</code> - Microsoft</li>
+                      <li><code>GOOGL</code> - Alphabet</li>
+                      <li><code>NVDA</code> - NVIDIA</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6 border-t bg-gray-50">
+              <div className="flex justify-between items-center">
+                <p className="text-sm text-gray-600">
+                  💡 Conseil : Commencez avec les données de demo, puis intégrez progressivement Yahoo Finance
+                </p>
+                <button
+                  onClick={() => setShowConfigModal(false)}
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PortfolioTracker;
